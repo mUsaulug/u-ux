@@ -26,7 +26,7 @@ const App: React.FC = () => {
     complaint: INITIAL_COMPLAINT,
     analysis: null,
     suggestion: null,
-    similarComplaints: [],
+    similarComplaints: null,
     isLoading: false,
     isSubmitting: false,
     error: null,
@@ -36,33 +36,54 @@ const App: React.FC = () => {
 
   const runAnalysis = useCallback(async () => {
     setState(prev => ({ ...prev, isLoading: true, error: null }));
+
     try {
+      // 1. Backend'e gönder (PII masking + analiz)
       const backendResult = await submitComplaint(state.complaint.originalText);
+
+      // 2. Backend response'u frontend format'ına çevir
       const { analysis, suggestion } = adaptBackendResponse(backendResult);
 
+      // 3. State'i güncelle
       setState(prev => ({
         ...prev,
         complaint: {
           ...prev.complaint,
+          id: backendResult.id.toString(),
           backendId: backendResult.id,
           maskedText: backendResult.maskedText,
+          piiTags: []
         },
         analysis,
         suggestion,
         isLoading: false
       }));
+
       setDraftResponse(suggestion.responseDraft);
       toast.success("Analiz başarıyla tamamlandı.");
 
-      // Asenkron benzer şikayetler yükleme
-      findSimilarComplaints(backendResult.id, 5).then(similar => {
-        setState(prev => ({ ...prev, similarComplaints: similar }));
-      }).catch(e => console.warn("Benzer vakalar yüklenemedi", e));
-
+      // 4. Benzer şikayetleri yükle (asenkron, blocking değil)
+      if (backendResult.id) {
+        findSimilarComplaints(backendResult.id, 5)
+          .then(similarData => {
+            setState(prev => ({
+              ...prev,
+              similarComplaints: similarData
+            }));
+          })
+          .catch(err => {
+            console.warn('Similar complaints failed:', err);
+            setState(prev => ({ ...prev, similarComplaints: [] }));
+          });
+      }
     } catch (err) {
-      console.error('Analysis error:', err);
-      setState(prev => ({ ...prev, isLoading: false, error: 'Analiz yapılamadı.' }));
-      toast.error("Backend bağlantı hatası oluştu.");
+      console.error('Backend error:', err);
+      setState(prev => ({
+        ...prev,
+        isLoading: false,
+        error: 'Backend bağlantı hatası. Lütfen backend servislerini başlatın.'
+      }));
+      toast.error("Bağlantı hatası oluştu.");
     }
   }, [state.complaint.originalText]);
 
@@ -76,7 +97,6 @@ const App: React.FC = () => {
     try {
       await approveComplaint(state.complaint.backendId, "AI destekli kontrol tamamlandı.");
       toast.success("Şikayet onaylandı ve yanıt gönderildi.");
-      // Normalde burada bir sonraki şikayete geçilir
     } catch (err) {
       toast.error("Onaylama işlemi başarısız.");
     } finally {
@@ -89,7 +109,7 @@ const App: React.FC = () => {
     if (!window.confirm("Bu şikayeti reddetmek istediğinizden emin misiniz?")) return;
     
     try {
-      await rejectComplaint(state.complaint.backendId, "Red gerekçesi: Geçersiz harcama itirazı.");
+      await rejectComplaint(state.complaint.backendId, "Reddedildi.");
       toast.info("Şikayet reddedildi.");
     } catch (err) {
       toast.error("Red işlemi başarısız.");
@@ -118,7 +138,7 @@ const App: React.FC = () => {
                 onTextChange={setDraftResponse} 
             />
 
-            {state.similarComplaints.length > 0 && (
+            {state.similarComplaints && state.similarComplaints.length > 0 && (
               <div className="mt-8 animate-fade-in">
                 <h4 className="text-[10px] text-slate-400 font-bold uppercase mb-3">Benzer Geçmiş Vakalar</h4>
                 <div className="space-y-2">

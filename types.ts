@@ -71,7 +71,7 @@ export interface ComplaintState {
   complaint: ComplaintData;
   analysis: AnalysisResult | null;
   suggestion: Suggestion | null;
-  similarComplaints: SimilarComplaint[];
+  similarComplaints: SimilarComplaint[] | null;
   isLoading: boolean;
   isSubmitting: boolean;
   error: string | null;
