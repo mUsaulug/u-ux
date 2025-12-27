@@ -6,7 +6,9 @@ export enum CustomerSegment {
 }
 
 export enum ComplaintCategory {
-  FRAUD_CARD_NOT_PRESENT = 'FRAUD_CARD_NOT_PRESENT',
+  FRAUD_UNAUTHORIZED_TX = 'FRAUD_UNAUTHORIZED_TX',
+  CARD_ISSUE = 'CARD_ISSUE',
+  TRANSFER_DELAY = 'TRANSFER_DELAY',
   SERVICE_ISSUE = 'SERVICE_ISSUE',
   TECHNICAL = 'TECHNICAL',
   UNKNOWN = 'UNKNOWN'
@@ -27,6 +29,7 @@ export enum Sentiment {
 
 export interface ComplaintData {
   id: string;
+  backendId?: number;
   timestamp: string;
   customerName: string;
   customerSegment: CustomerSegment;
@@ -55,10 +58,20 @@ export interface Suggestion {
   kbArticles: KBArticle[];
 }
 
+export interface SimilarComplaint {
+  id: number;
+  masked_text: string;
+  category: string;
+  similarity_score: number;
+  created_at: string;
+  status: string;
+}
+
 export interface ComplaintState {
   complaint: ComplaintData;
   analysis: AnalysisResult | null;
   suggestion: Suggestion | null;
+  similarComplaints: SimilarComplaint[];
   isLoading: boolean;
   isSubmitting: boolean;
   error: string | null;

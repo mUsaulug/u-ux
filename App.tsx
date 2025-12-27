@@ -6,18 +6,19 @@ import AIInsightCard from './components/AIInsightCard';
 import ResponseEditor from './components/ResponseEditor';
 import ActionBar from './components/ActionBar';
 import ChatBot from './components/ChatBot';
+import { Toaster, toast } from 'sonner';
 import { ComplaintData, CustomerSegment, ComplaintState, Priority } from './types';
-import { analyzeComplaint } from './services/geminiService';
+import { submitComplaint, findSimilarComplaints, approveComplaint, rejectComplaint } from './services/backendService';
+import { adaptBackendResponse } from './services/dataAdapter';
 
-// Initial Mock Data to simulate current task
 const INITIAL_COMPLAINT: ComplaintData = {
   id: "CMP-2024-8921",
-  timestamp: "2024-02-14T10:30:00Z",
+  timestamp: new Date().toISOString(),
   customerName: "Ahmet Yılmaz",
   customerSegment: CustomerSegment.VIP_PLATINUM,
   originalText: "Kredi kartımdan Apple Store harcaması çekilmiş, ben yapmadım! İade istiyorum hemen!",
-  maskedText: "Kredi kartımdan [MERCHANT] harcaması çekilmiş, ben yapmadım! İade istiyorum hemen!",
-  piiTags: ["MERCHANT"]
+  maskedText: "Yükleniyor...",
+  piiTags: []
 };
 
 const App: React.FC = () => {
@@ -25,6 +26,7 @@ const App: React.FC = () => {
     complaint: INITIAL_COMPLAINT,
     analysis: null,
     suggestion: null,
+    similarComplaints: [],
     isLoading: false,
     isSubmitting: false,
     error: null,
@@ -35,44 +37,75 @@ const App: React.FC = () => {
   const runAnalysis = useCallback(async () => {
     setState(prev => ({ ...prev, isLoading: true, error: null }));
     try {
-      const result = await analyzeComplaint(state.complaint.originalText);
+      const backendResult = await submitComplaint(state.complaint.originalText);
+      const { analysis, suggestion } = adaptBackendResponse(backendResult);
+
       setState(prev => ({
         ...prev,
-        analysis: result.analysis,
-        suggestion: result.suggestion,
+        complaint: {
+          ...prev.complaint,
+          backendId: backendResult.id,
+          maskedText: backendResult.maskedText,
+        },
+        analysis,
+        suggestion,
         isLoading: false
       }));
-      setDraftResponse(result.suggestion.responseDraft);
+      setDraftResponse(suggestion.responseDraft);
+      toast.success("Analiz başarıyla tamamlandı.");
+
+      // Asenkron benzer şikayetler yükleme
+      findSimilarComplaints(backendResult.id, 5).then(similar => {
+        setState(prev => ({ ...prev, similarComplaints: similar }));
+      }).catch(e => console.warn("Benzer vakalar yüklenemedi", e));
+
     } catch (err) {
-      setState(prev => ({ ...prev, isLoading: false, error: 'Analiz sırasında hata oluştu.' }));
+      console.error('Analysis error:', err);
+      setState(prev => ({ ...prev, isLoading: false, error: 'Analiz yapılamadı.' }));
+      toast.error("Backend bağlantı hatası oluştu.");
     }
   }, [state.complaint.originalText]);
 
   useEffect(() => {
     runAnalysis();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [runAnalysis]);
 
   const handleApprove = async () => {
+    if (!state.complaint.backendId) return;
     setState(prev => ({ ...prev, isSubmitting: true }));
-    // Simulate API call
-    setTimeout(() => {
-        alert('Şikayet başarıyla çözüldü ve yanıt gönderildi.');
-        setState(prev => ({ ...prev, isSubmitting: false }));
-    }, 1000);
+    try {
+      await approveComplaint(state.complaint.backendId, "AI destekli kontrol tamamlandı.");
+      toast.success("Şikayet onaylandı ve yanıt gönderildi.");
+      // Normalde burada bir sonraki şikayete geçilir
+    } catch (err) {
+      toast.error("Onaylama işlemi başarısız.");
+    } finally {
+      setState(prev => ({ ...prev, isSubmitting: false }));
+    }
+  };
+
+  const handleReject = async () => {
+    if (!state.complaint.backendId) return;
+    if (!window.confirm("Bu şikayeti reddetmek istediğinizden emin misiniz?")) return;
+    
+    try {
+      await rejectComplaint(state.complaint.backendId, "Red gerekçesi: Geçersiz harcama itirazı.");
+      toast.info("Şikayet reddedildi.");
+    } catch (err) {
+      toast.error("Red işlemi başarısız.");
+    }
   };
 
   return (
     <div className="flex flex-col h-screen overflow-hidden text-slate-900">
+      <Toaster position="top-right" richColors />
       <Header />
       
       <main className="flex flex-1 overflow-hidden relative">
-        {/* Left Panel: The Truth */}
         <section className="w-[40%] border-r border-slate-200 bg-zinc-50 flex flex-col relative z-0">
           <SmartComplaintViewer data={state.complaint} />
         </section>
 
-        {/* Right Panel: Workspace */}
         <section className="flex-1 bg-white flex flex-col h-full overflow-hidden relative">
           <div className="flex-1 overflow-y-auto p-8 max-w-4xl mx-auto w-full">
             <AIInsightCard 
@@ -85,14 +118,27 @@ const App: React.FC = () => {
                 onTextChange={setDraftResponse} 
             />
 
-            {/* Empty space filler for scroll */}
+            {state.similarComplaints.length > 0 && (
+              <div className="mt-8 animate-fade-in">
+                <h4 className="text-[10px] text-slate-400 font-bold uppercase mb-3">Benzer Geçmiş Vakalar</h4>
+                <div className="space-y-2">
+                  {state.similarComplaints.map(sc => (
+                    <div key={sc.id} className="p-3 bg-slate-50 border rounded-xl flex justify-between items-center hover:bg-slate-100 transition-colors cursor-pointer">
+                      <p className="text-xs text-slate-600 font-medium truncate max-w-[70%] italic">"{sc.masked_text}"</p>
+                      <span className="text-[10px] font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full">%{Math.round(sc.similarity_score * 100)} Eşleşme</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             <div className="h-24" />
           </div>
 
           <ActionBar 
             onApprove={handleApprove}
-            onHold={() => {}}
-            onReject={() => {}}
+            onHold={() => toast.info("Şikayet bekleme listesine alındı.")}
+            onReject={handleReject}
             isReady={!!state.analysis && !state.isLoading}
             confidenceScore={state.analysis?.confidenceScore || 0}
           />
@@ -105,7 +151,7 @@ const App: React.FC = () => {
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-[2px] z-[100] flex items-center justify-center">
             <div className="bg-white p-8 rounded-3xl shadow-2xl flex flex-col items-center gap-4 animate-fade-in">
                 <div className="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" />
-                <p className="font-bold text-slate-900">Yanıt İletiliyor...</p>
+                <p className="font-bold text-slate-900">İşlem Yapılıyor...</p>
             </div>
         </div>
       )}
